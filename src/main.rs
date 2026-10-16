@@ -189,13 +189,22 @@ pub mod cad_occt {
             let mut normals = Vec::new();
             let mut indices = Vec::new();
 
-            let mut add_quad = |p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, normal: Vec3| {
+            fn push_quad(
+                vertices: &mut Vec<Vec3>,
+                normals: &mut Vec<Vec3>,
+                indices: &mut Vec<[u32; 3]>,
+                p0: Vec3,
+                p1: Vec3,
+                p2: Vec3,
+                p3: Vec3,
+                normal: Vec3,
+            ) {
                 let base = vertices.len() as u32;
                 vertices.extend_from_slice(&[p0, p1, p2, p3]);
                 normals.extend_from_slice(&[normal, normal, normal, normal]);
                 indices.push([base, base + 1, base + 2]);
                 indices.push([base, base + 2, base + 3]);
-            };
+            }
 
             let hx = 50.0_f32; // X: -50..+50 mm (100 mm)
             let hy = 30.0_f32; // Y: -30..+30 mm (60 mm)
@@ -204,7 +213,10 @@ pub mod cad_occt {
             let segments = 48_usize;
 
             // Alt Düzlem (Z = 0, Normal = -Z)
-            add_quad(
+            push_quad(
+                &mut vertices,
+                &mut normals,
+                &mut indices,
                 Vec3::new(-hx, -hy, 0.0),
                 Vec3::new(-hx, hy, 0.0),
                 Vec3::new(hx, hy, 0.0),
@@ -212,7 +224,10 @@ pub mod cad_occt {
                 Vec3::NEG_Z,
             );
             // Ön Yüz (Y = -hy, Normal = -Y)
-            add_quad(
+            push_quad(
+                &mut vertices,
+                &mut normals,
+                &mut indices,
                 Vec3::new(-hx, -hy, 0.0),
                 Vec3::new(hx, -hy, 0.0),
                 Vec3::new(hx, -hy, hz),
@@ -220,7 +235,10 @@ pub mod cad_occt {
                 Vec3::NEG_Y,
             );
             // Arka Yüz (Y = +hy, Normal = +Y)
-            add_quad(
+            push_quad(
+                &mut vertices,
+                &mut normals,
+                &mut indices,
                 Vec3::new(hx, hy, 0.0),
                 Vec3::new(-hx, hy, 0.0),
                 Vec3::new(-hx, hy, hz),
@@ -228,7 +246,10 @@ pub mod cad_occt {
                 Vec3::Y,
             );
             // Sol Yüz (X = -hx, Normal = -X)
-            add_quad(
+            push_quad(
+                &mut vertices,
+                &mut normals,
+                &mut indices,
                 Vec3::new(-hx, hy, 0.0),
                 Vec3::new(-hx, -hy, 0.0),
                 Vec3::new(-hx, -hy, hz),
@@ -236,7 +257,10 @@ pub mod cad_occt {
                 Vec3::NEG_X,
             );
             // Sağ Yüz (X = +hx, Normal = +X)
-            add_quad(
+            push_quad(
+                &mut vertices,
+                &mut normals,
+                &mut indices,
                 Vec3::new(hx, -hy, 0.0),
                 Vec3::new(hx, hy, 0.0),
                 Vec3::new(hx, hy, hz),
@@ -275,7 +299,7 @@ pub mod cad_occt {
 
                 let o0 = outer_scale(c0, s0);
                 let o1 = outer_scale(c1, s1);
-                add_quad(p_top0, p_top1, o1, o0, Vec3::Z);
+                push_quad(&mut vertices, &mut normals, &mut indices, p_top0, p_top1, o1, o0, Vec3::Z);
             }
 
             let feature_edges =
