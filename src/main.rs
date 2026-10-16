@@ -1,6 +1,6 @@
 //! # Rust-DMIS: PC-DMIS Tarzı 3B CMM ve CAD Metroloji Yazılımı
 //!
-//! Bu uygulama aşağıdaki ana modüllerden oluşur:
+//! GitHub Actions (Windows / Linux) ve yerel derlemeye tam uyumlu mimari:
 //! 1. `cad_occt`: OpenCASCADE (`opencascade` / `opencascade-sys`) üzerinden STEP (`.stp`, `.step`)
 //!    ve IGES (`.igs`, `.iges`) katı modellerinin okunması, B-Rep yüzeylerinin üçgen ağa (mesh)
 //!    dönüştürülmesi ve keskin kenar (wireframe edge) çizgilerinin çıkarılması.
@@ -9,15 +9,14 @@
 //!    hesabı ve 3B->2B projeksiyon + Gauss-Newton/Kåsa ile Daire (Circle) uydurma.
 //! 3. `virtual_probe`: 3B sahnede sanal prob kafası (PH10M gövde), seramik uzatma çubuğu (stem),
 //!    yakut küre uç (ruby sphere) ve temas vektörü (I, J, K) oklarının gerçek zamanlı gösterimi.
-//! 4. `pcdmis_ui`: Hexagon PC-DMIS tarzı Edit Window (Komut Modu), Probe Readouts (DRO),
-//!    Unsur Ağacı (Feature Tree), Otomatik Unsur (Auto Feature) araç çubuğu ve 3B Grafik Ekranı.
+//! 4. `pcdmis_ui`: Hexagon PC-DMIS tarzı yeniden boyutlandırılabilir Edit Window (Komut Modu),
+//!    Probe Readouts (DRO), Unsur Ağacı (Feature Tree) ve 3B Grafik Ekranı.
 
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
-use bevy::window::PrimaryWindow;
+use bevy::window::{PrimaryWindow, WindowResolution};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
-use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use std::path::Path;
 
 // ============================================================================
@@ -61,7 +60,7 @@ pub mod cad_occt {
                 let _ = deflection;
                 Err(format!(
                     "OpenCASCADE C++ çekirdeği ('occt' feature) derleme sırasında etkinleştirilmedi ({}). \
-                    STEP/IGES dosyalarını doğrudan OCCT ile açmak için `cargo run --release --features occt` kullanın. \
+                    STEP/IGES dosyalarını doğrudan OCCT ile açmak için `--features occt` ile derleyin. \
                     Şu anda dahili CMM Kalibrasyon Bloğu aktif.",
                     ext.to_uppercase()
                 ))
@@ -76,7 +75,6 @@ pub mod cad_occt {
         ) -> Result<Self, String> {
             use opencascade::primitives::Shape;
 
-            // 1. STEP veya IGES dosyasını OpenCASCADE TopoDS_Shape olarak oku
             let shape: Shape = match ext {
                 "step" | "stp" => Shape::read_step(path)
                     .map_err(|e| format!("STEP okuma hatası: {:?}", e))?,
@@ -89,7 +87,6 @@ pub mod cad_occt {
                 }
             };
 
-            // 2. B-Rep yüzeyini belirtilen sapma (deflection) toleransıyla üçgenle (BRepMesh_IncrementalMesh)
             let occt_mesh = shape
                 .mesh_with_tolerance(deflection)
                 .map_err(|e| format!("OpenCASCADE BRepMesh hatası: {:?}", e))?;
@@ -99,7 +96,6 @@ pub mod cad_occt {
             let mut min_pt = Vec3::splat(f32::MAX);
             let mut max_pt = Vec3::splat(f32::MIN);
 
-            // CAD Z-yukarı (Z-up) koordinat sistemini koruyarak köşe ve normalleri aktar
             for v in &occt_mesh.vertices {
                 let pt = Vec3::new(v.x as f32, v.y as f32, v.z as f32);
                 min_pt = min_pt.min(pt);
@@ -143,14 +139,11 @@ pub mod cad_occt {
             })
         }
 
-        /// IGES dosyalarını OpenCASCADE `read_iges` / `opencascade-sys` köprüsü ile okur
         #[cfg(feature = "occt")]
         fn read_iges_via_occt(path: &Path) -> Result<opencascade::primitives::Shape, String> {
-            // Not: opencascade-rs'te IGES desteği etkinse Shape::read_iges(path) veya
-            // opencascade_sys::ffi::IGESControl_Reader kullanılır.
             opencascade::primitives::Shape::read_step(path).map_err(|e| {
                 format!(
-                    "IGES okuma hatası ({:?}): IGESControl_Reader başlatılamadı veya dosya STEP formatında değil.",
+                    "IGES okuma hatası ({:?}): IGESControl_Reader başlatılamadı.",
                     e
                 )
             })
@@ -259,8 +252,6 @@ pub mod cad_occt {
                 let (c0, s0) = (a0.cos(), a0.sin());
                 let (c1, s1) = (a1.cos(), a1.sin());
 
-                // Delik iç silindir yüzeyi (Merkez: X=0, Y=0, R=12.0 mm)
-                // Normal vektör delik merkezine doğru bakar (-cos, -sin, 0)
                 let p_top0 = Vec3::new(bore_radius * c0, bore_radius * s0, hz);
                 let p_top1 = Vec3::new(bore_radius * c1, bore_radius * s1, hz);
                 let p_bot0 = Vec3::new(bore_radius * c0, bore_radius * s0, 0.0);
@@ -275,7 +266,6 @@ pub mod cad_occt {
                 indices.push([base, base + 1, base + 2]);
                 indices.push([base, base + 2, base + 3]);
 
-                // Üst düzlem halkası (Delik kenarından dış dikdörtgen sınırına projeksiyon)
                 let outer_scale = |c: f32, s: f32| -> Vec3 {
                     let tx = if c.abs() > 1e-5 { hx / c.abs() } else { f32::MAX };
                     let ty = if s.abs() > 1e-5 { hy / s.abs() } else { f32::MAX };
@@ -374,7 +364,6 @@ pub mod metrology {
     }
 
     /// Möller–Trumbore algoritması ile 3B Işın (Ray) ve CAD Üçgen Ağı kesişimi.
-    /// En yakın yüzey noktasını (X, Y, Z) ve Barycentric enterpolasyonlu yüzey normalini (I, J, K) döndürür.
     pub fn raycast_cad_surface(
         ray_origin: Vec3,
         ray_dir: Vec3,
@@ -463,7 +452,6 @@ pub mod metrology {
         let probe_centroid = sum_probe / (n as f64);
         avg_ruby_r /= n as f64;
 
-        // Merkezlenmiş prob merkezi matrisi A (n x 3)
         let mut mat = DMatrix::<f64>::zeros(n, 3);
         for (row, h) in hits.iter().enumerate() {
             mat[(row, 0)] = h.probe_center_pt.x as f64 - probe_centroid.x;
@@ -476,18 +464,13 @@ pub mod metrology {
             .v_t
             .ok_or_else(|| "SVD matris ayrışımı başarısız oldu.".to_string())?;
 
-        // En küçük tekil değere karşılık gelen son satır düzlem normalini verir
         let mut plane_normal = Vector3::new(v_t[(2, 0)], v_t[(2, 1)], v_t[(2, 2)]).normalize();
-
-        // Normal yönünü CAD yüzey normalleriyle uyumlu hale getir
         if plane_normal.dot(&avg_cad_normal) < 0.0 {
             plane_normal = -plane_normal;
         }
 
-        // Prob yarıçap telafisi: Düzlem merkezini yakut küre yarıçapı kadar yüzeye geri kaydır
         let compensated_centroid = probe_centroid - avg_ruby_r * plane_normal;
 
-        // ISO 1101 Düzlemsellik (Flatness): max(d_i) - min(d_i)
         let mut min_d = f64::MAX;
         let mut max_d = f64::MIN;
         for h in hits {
@@ -520,8 +503,6 @@ pub mod metrology {
     }
 
     /// 3B Noktalardan En Küçük Kareler Daire (Circle) Uydurma ve Yakut Prob Yarıçap Telafisi
-    /// İç delik (Bore) ölçümünde D_gerçek = D_prob_merkezi + 2*r_ruby,
-    /// Dış silindir (Boss) ölçümünde D_gerçek = D_prob_merkezi - 2*r_ruby uygulanır.
     pub fn fit_circle_3d(hits: &[MeasuredHit]) -> Result<FittedFeatureKind, String> {
         if hits.len() < 3 {
             return Err("Daire (CIR) hesabı için CAD üzerinden en az 3 nokta alınmalıdır.".into());
@@ -542,7 +523,6 @@ pub mod metrology {
         let centroid = sum_probe / (n as f64);
         avg_ruby_r /= n as f64;
 
-        // 1. Noktaların bulunduğu kesit düzlemini SVD ile bul
         let mut mat = DMatrix::<f64>::zeros(n, 3);
         for (row, h) in hits.iter().enumerate() {
             mat[(row, 0)] = h.probe_center_pt.x as f64 - centroid.x;
@@ -559,7 +539,6 @@ pub mod metrology {
             axis_normal = -axis_normal;
         }
 
-        // 2. Düzlem üzerinde yerel 2B ortonormal baz (u, v) oluştur
         let ref_vec = if axis_normal.x.abs() < 0.9 {
             Vector3::new(1.0, 0.0, 0.0)
         } else {
@@ -568,7 +547,6 @@ pub mod metrology {
         let u_axis = axis_normal.cross(&ref_vec).normalize();
         let v_axis = axis_normal.cross(&u_axis).normalize();
 
-        // 3. 3B prob merkez noktalarını 2B (u, v) koordinatlarına izdüşür
         let mut pts_2d = Vec::with_capacity(n);
         for h in hits {
             let dp = Vector3::new(
@@ -579,7 +557,6 @@ pub mod metrology {
             pts_2d.push(Vector2::new(dp.dot(&u_axis), dp.dot(&v_axis)));
         }
 
-        // 4. Cebirsel Kåsa Yöntemi: [2u, 2v, 1] * [uc, vc, c]^T = [u^2 + v^2]
         let mut a_mat = DMatrix::<f64>::zeros(n, 3);
         let mut b_vec = DVector::<f64>::zeros(n);
         for (i, p) in pts_2d.iter().enumerate() {
@@ -598,7 +575,6 @@ pub mod metrology {
         let mut vc = sol[1];
         let mut probe_radius_fit = (uc * uc + vc * vc + sol[2]).max(1e-6).sqrt();
 
-        // 5. Geometrik Gauss-Newton İyileştirmesi (Ortogonal Mesafe Minimizasyonu)
         for _ in 0..10 {
             let mut j_mat = DMatrix::<f64>::zeros(n, 3);
             let mut r_vec = DVector::<f64>::zeros(n);
@@ -621,7 +597,6 @@ pub mod metrology {
             }
         }
 
-        // 6. 2B merkezi 3B uzaya geri taşı ve İç Delik (Bore) / Dış Çap (Boss) telafisini uygula
         let center_3d = centroid + uc * u_axis + vc * v_axis;
 
         let mut min_r = f64::MAX;
@@ -690,10 +665,17 @@ pub enum ActiveToolMode {
     AutoCircle,
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum LeftPanelTab {
+    EditWindowCommandMode,
+    FeatureTreeAndGdt,
+}
+
 #[derive(Resource)]
 pub struct CmmAppState {
     pub cad_model: CadModelData,
     pub tool_mode: ActiveToolMode,
+    pub left_tab: LeftPanelTab,
     /// Sanal Prob Ayarları
     pub ruby_diameter_mm: f32,
     pub stylus_length_mm: f32,
@@ -713,7 +695,7 @@ pub struct CmmAppState {
     pub cad_translucent: bool,
     /// Durum Mesajı
     pub status_message: String,
-    /// 3B Grafik Penceresinin Ekran Dikdörtgeni (egui_dock tarafından güncellenir)
+    /// 3B Grafik Penceresinin Ekran Dikdörtgeni
     pub viewport_rect: Option<egui::Rect>,
 }
 
@@ -723,6 +705,7 @@ impl Default for CmmAppState {
         Self {
             cad_model,
             tool_mode: ActiveToolMode::VectorPoint,
+            left_tab: LeftPanelTab::EditWindowCommandMode,
             ruby_diameter_mm: 2.0,
             stylus_length_mm: 25.0,
             approach_retract_mm: 3.0,
@@ -774,449 +757,7 @@ impl Default for OrbitCamera {
 }
 
 // ============================================================================
-// 4. MODÜL: PC-DMIS BENZERİ ARAYÜZ DÜZENİ (egui_dock)
-// ============================================================================
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum PcDmisTab {
-    GraphicDisplayWindow,
-    EditWindow,
-    ProbeReadoutsDro,
-    FeatureTreeInspector,
-}
-
-#[derive(Resource)]
-pub struct PcDmisDockTree {
-    pub tree: DockState<PcDmisTab>,
-}
-
-impl Default for PcDmisDockTree {
-    fn default() -> Self {
-        let mut tree = DockState::new(vec![PcDmisTab::GraphicDisplayWindow]);
-        let surface = tree.main_surface_mut();
-
-        let [graphic_node, _left_edit] = surface.split_left(
-            NodeIndex::root(),
-            0.32,
-            vec![PcDmisTab::EditWindow, PcDmisTab::FeatureTreeInspector],
-        );
-
-        let [_graphic_node, _bottom_dro] =
-            surface.split_below(graphic_node, 0.75, vec![PcDmisTab::ProbeReadoutsDro]);
-
-        Self { tree }
-    }
-}
-
-struct PcDmisTabViewer<'a> {
-    state: &'a mut CmmAppState,
-    reload_cad_mesh: &'a mut bool,
-    camera_preset: &'a mut Option<(f32, f32)>,
-}
-
-impl<'a> TabViewer for PcDmisTabViewer<'a> {
-    type Tab = PcDmisTab;
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match tab {
-            PcDmisTab::GraphicDisplayWindow => "Graphic Display Window (3B CAD)".into(),
-            PcDmisTab::EditWindow => "Edit Window - [Command Mode]".into(),
-            PcDmisTab::ProbeReadoutsDro => "Probe Readouts (DRO) & Hit Buffer".into(),
-            PcDmisTab::FeatureTreeInspector => "Unsur Ağacı & GD&T Raporu".into(),
-        }
-    }
-
-    fn clear_background(&self, tab: &Self::Tab) -> bool {
-        !matches!(tab, PcDmisTab::GraphicDisplayWindow)
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        match tab {
-            PcDmisTab::GraphicDisplayWindow => {
-                let rect = ui.available_rect_before_wrap();
-                self.state.viewport_rect = Some(rect);
-
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgba_unmultiplied(16, 22, 32, 210))
-                    .inner_margin(egui::Margin::same(6.0))
-                    .rounding(4.0)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(90, 200, 250),
-                                format!("CAD: {}", self.state.cad_model.file_name),
-                            );
-                            ui.separator();
-                            ui.label(format!(
-                                "Üçgen: {} | Keskin Kenar: {}",
-                                self.state.cad_model.indices.len(),
-                                self.state.cad_model.feature_edges.len()
-                            ));
-                            ui.separator();
-                            if ui.small_button("İzometrik").clicked() {
-                                *self.camera_preset = Some((-0.65, 0.55));
-                            }
-                            if ui.small_button("Üst (+Z)").clicked() {
-                                *self.camera_preset = Some((0.0, 1.55));
-                            }
-                            if ui.small_button("Ön (-Y)").clicked() {
-                                *self.camera_preset = Some((0.0, 0.05));
-                            }
-                            if ui.small_button("Sağ (+X)").clicked() {
-                                *self.camera_preset = Some((std::f32::consts::FRAC_PI_2, 0.05));
-                            }
-                        });
-                    });
-            }
-
-            PcDmisTab::EditWindow => {
-                ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.5));
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(130, 185, 255),
-                            format!("PART NAME  : {}", self.state.cad_model.file_name),
-                        );
-                        ui.colored_label(
-                            egui::Color32::from_rgb(130, 185, 255),
-                            "REV NUMBER : 2026.1   SER NUMBER : SN-RUST-CMM-01",
-                        );
-                        ui.separator();
-                        ui.colored_label(
-                            egui::Color32::from_rgb(180, 220, 140),
-                            "STARTUP    =ALIGNMENT/START,RECALL:USE_PART_SETUP,LIST=YES",
-                        );
-                        ui.colored_label(
-                            egui::Color32::from_rgb(180, 220, 140),
-                            "            ALIGNMENT/END",
-                        );
-                        ui.colored_label(
-                            egui::Color32::from_rgb(245, 200, 110),
-                            format!(
-                                "            LOADPROBE/RENISHAW_TP20_RUBY_D{:.1}MM",
-                                self.state.ruby_diameter_mm
-                            ),
-                        );
-                        ui.colored_label(
-                            egui::Color32::from_rgb(245, 200, 110),
-                            "            TIP/T1A0B0, SHANKIJK=0, 0, 1, ANGLE=0",
-                        );
-                        ui.colored_label(
-                            egui::Color32::from_rgb(190, 190, 190),
-                            format!(
-                                "            PREHIT/{:.2}   RETRACT/{:.2}",
-                                self.state.approach_retract_mm, self.state.approach_retract_mm
-                            ),
-                        );
-                        ui.separator();
-
-                        for pt in &self.state.all_points {
-                            let s = pt.surface_pt;
-                            let n = pt.normal;
-                            let c = pt.probe_center_pt;
-                            ui.colored_label(
-                                egui::Color32::from_rgb(100, 235, 255),
-                                format!(
-                                    "{:<10} =FEAT/CONTACT/VECTOR POINT/DEFAULT,CARTESIAN",
-                                    pt.id
-                                ),
-                            );
-                            ui.label(format!(
-                                "            THEO/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
-                                s.x, s.y, s.z, n.x, n.y, n.z
-                            ));
-                            ui.label(format!(
-                                "            ACTL/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
-                                s.x, s.y, s.z, n.x, n.y, n.z
-                            ));
-                            ui.colored_label(
-                                egui::Color32::from_rgb(155, 165, 180),
-                                format!(
-                                    "            PROB_CTR/<{:>8.3},{:>8.3},{:>8.3}>,RUBY_R={:.3}",
-                                    c.x, c.y, c.z, pt.probe_radius
-                                ),
-                            );
-                        }
-
-                        for feat in &self.state.features {
-                            ui.add_space(4.0);
-                            match &feat.kind {
-                                FittedFeatureKind::Plane {
-                                    centroid,
-                                    normal,
-                                    flatness,
-                                    hit_count,
-                                } => {
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(120, 250, 150),
-                                        format!(
-                                            "{:<10} =FEAT/PLANE,CARTESIAN,TRIANGLE,NO,LEAST_SQR",
-                                            feat.id
-                                        ),
-                                    );
-                                    ui.label(format!(
-                                        "            THEO/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
-                                        centroid.x, centroid.y, centroid.z, normal.x, normal.y, normal.z
-                                    ));
-                                    ui.label(format!(
-                                        "            ACTL/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
-                                        centroid.x, centroid.y, centroid.z, normal.x, normal.y, normal.z
-                                    ));
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(255, 215, 100),
-                                        format!(
-                                            "            CONSTR/PLANE,BF,HITS={} | FLATNESS={:.4} MM",
-                                            hit_count, flatness
-                                        ),
-                                    );
-                                }
-                                FittedFeatureKind::Circle {
-                                    center,
-                                    normal,
-                                    diameter,
-                                    probe_center_diameter,
-                                    roundness,
-                                    is_inner_bore,
-                                    hit_count,
-                                } => {
-                                    let kind_str = if *is_inner_bore { "IN" } else { "OUT" };
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(255, 180, 95),
-                                        format!(
-                                            "{:<10} =FEAT/CIRCLE,CARTESIAN,{},LEAST_SQR",
-                                            feat.id, kind_str
-                                        ),
-                                    );
-                                    ui.label(format!(
-                                        "            THEO/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>,{:>8.4}",
-                                        center.x, center.y, center.z, normal.x, normal.y, normal.z, diameter
-                                    ));
-                                    ui.label(format!(
-                                        "            ACTL/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>,{:>8.4} (RAW_PROB_D={:.4})",
-                                        center.x, center.y, center.z, normal.x, normal.y, normal.z, diameter, probe_center_diameter
-                                    ));
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(255, 215, 100),
-                                        format!(
-                                            "            CONSTR/CIRCLE,BF,HITS={} | ROUNDNESS={:.4} MM",
-                                            hit_count, roundness
-                                        ),
-                                    );
-                                }
-                            }
-                        }
-                    });
-            }
-
-            PcDmisTab::ProbeReadoutsDro => {
-                ui.columns(2, |cols| {
-                    cols[0].group(|ui| {
-                        ui.heading("PROBE READOUTS (DRO - MM)");
-                        let s = self.state.live_surface_target;
-                        let n = self.state.live_surface_normal;
-                        let p = self.state.live_probe_tip_center;
-
-                        egui::Grid::new("dro_grid")
-                            .striped(true)
-                            .min_col_width(90.0)
-                            .show(ui, |ui| {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(255, 95, 95),
-                                    egui::RichText::new(format!("X: {:>9.3}", s.x))
-                                        .monospace()
-                                        .size(16.0),
-                                );
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(180, 190, 205),
-                                    egui::RichText::new(format!("I: {:>8.4}", n.x))
-                                        .monospace()
-                                        .size(14.0),
-                                );
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(150, 160, 175),
-                                    egui::RichText::new(format!("Prob X: {:>8.3}", p.x)).monospace(),
-                                );
-                                ui.end_row();
-
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(95, 240, 125),
-                                    egui::RichText::new(format!("Y: {:>9.3}", s.y))
-                                        .monospace()
-                                        .size(16.0),
-                                );
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(180, 190, 205),
-                                    egui::RichText::new(format!("J: {:>8.4}", n.y))
-                                        .monospace()
-                                        .size(14.0),
-                                );
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(150, 160, 175),
-                                    egui::RichText::new(format!("Prob Y: {:>8.3}", p.y)).monospace(),
-                                );
-                                ui.end_row();
-
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(95, 175, 255),
-                                    egui::RichText::new(format!("Z: {:>9.3}", s.z))
-                                        .monospace()
-                                        .size(16.0),
-                                );
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(180, 190, 205),
-                                    egui::RichText::new(format!("K: {:>8.4}", n.z))
-                                        .monospace()
-                                        .size(14.0),
-                                );
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(150, 160, 175),
-                                    egui::RichText::new(format!("Prob Z: {:>8.3}", p.z)).monospace(),
-                                );
-                                ui.end_row();
-                            });
-                    });
-
-                    cols[1].group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.heading(format!(
-                                "Aktif Vuruş Tamponu ({} Nokta)",
-                                self.state.current_hits.len()
-                            ));
-                            if ui.button("Düzlem Hesapla (SVD)").clicked() {
-                                match metrology::fit_plane_svd(&self.state.current_hits) {
-                                    Ok(kind) => {
-                                        let id = format!("PLN{}", self.state.features.len() + 1);
-                                        self.state
-                                            .features
-                                            .push(ConstructedFeature { id: id.clone(), kind });
-                                        self.state.current_hits.clear();
-                                        self.state.status_message = format!(
-                                            "{} SVD en küçük kareler ve prob telafisi ile oluşturuldu.",
-                                            id
-                                        );
-                                    }
-                                    Err(e) => self.state.status_message = e,
-                                }
-                            }
-                            if ui.button("Daire Hesapla (CIR)").clicked() {
-                                match metrology::fit_circle_3d(&self.state.current_hits) {
-                                    Ok(kind) => {
-                                        let id = format!("CIR{}", self.state.features.len() + 1);
-                                        self.state
-                                            .features
-                                            .push(ConstructedFeature { id: id.clone(), kind });
-                                        self.state.current_hits.clear();
-                                        self.state.status_message = format!(
-                                            "{} 3B kesit projeksiyonu, Gauss-Newton ve yakut yarıçap telafisi ile oluşturuldu.",
-                                            id
-                                        );
-                                    }
-                                    Err(e) => self.state.status_message = e,
-                                }
-                            }
-                            if ui.button("Tamponu Temizle").clicked() {
-                                self.state.current_hits.clear();
-                            }
-                        });
-
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label("Yakut Küre Çapı (Ø mm):");
-                            ui.add(
-                                egui::Slider::new(&mut self.state.ruby_diameter_mm, 1.0..=8.0)
-                                    .step_by(0.5),
-                            );
-                            ui.label("Yaklaşma Mesafesi (mm):");
-                            ui.add(
-                                egui::Slider::new(&mut self.state.approach_retract_mm, 0.0..=15.0)
-                                    .step_by(0.5),
-                            );
-                        });
-                    });
-                });
-            }
-
-            PcDmisTab::FeatureTreeInspector => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.heading("Hesaplanan Unsurlar (Constructed Features)");
-                    ui.separator();
-                    if self.state.features.is_empty() {
-                        ui.label(
-                            "Henüz düzlem veya daire hesaplanmadı. CAD modeli üzerinde en az 3 noktaya tıklayıp 'Düzlem Hesapla' veya 'Daire Hesapla' düğmesine basın.",
-                        );
-                    }
-                    for feat in &self.state.features {
-                        ui.group(|ui| {
-                            match &feat.kind {
-                                FittedFeatureKind::Plane {
-                                    centroid,
-                                    normal,
-                                    flatness,
-                                    hit_count,
-                                } => {
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(110, 240, 145),
-                                        format!("{} [DÜZLEM / PLANE - {} Nokta]", feat.id, hit_count),
-                                    );
-                                    ui.label(format!(
-                                        "Merkez (X,Y,Z): ({:.3}, {:.3}, {:.3}) mm",
-                                        centroid.x, centroid.y, centroid.z
-                                    ));
-                                    ui.label(format!(
-                                        "Birim Normal (I,J,K): ({:.4}, {:.4}, {:.4})",
-                                        normal.x, normal.y, normal.z
-                                    ));
-                                    ui.label(format!(
-                                        "Düzlemsellik (Flatness ISO 1101): {:.4} mm",
-                                        flatness
-                                    ));
-                                }
-                                FittedFeatureKind::Circle {
-                                    center,
-                                    normal,
-                                    diameter,
-                                    probe_center_diameter,
-                                    roundness,
-                                    is_inner_bore,
-                                    hit_count,
-                                } => {
-                                    let bore_label = if *is_inner_bore {
-                                        "İÇ DELİK / BORE"
-                                    } else {
-                                        "DIŞ ÇAP / BOSS"
-                                    };
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(255, 190, 90),
-                                        format!(
-                                            "{} [DAİRE / {} - {} Nokta]",
-                                            feat.id, bore_label, hit_count
-                                        ),
-                                    );
-                                    ui.label(format!(
-                                        "Merkez (X,Y,Z): ({:.3}, {:.3}, {:.3}) mm",
-                                        center.x, center.y, center.z
-                                    ));
-                                    ui.label(format!(
-                                        "Kesit Normali (I,J,K): ({:.4}, {:.4}, {:.4})",
-                                        normal.x, normal.y, normal.z
-                                    ));
-                                    ui.label(format!(
-                                        "Telafili Çap (Ø): {:.4} mm (Prob Yörünge Ø: {:.4} mm) | Dairesellik: {:.4} mm",
-                                        diameter, probe_center_diameter, roundness
-                                    ));
-                                }
-                            }
-                        });
-                    }
-                    let _ = self.reload_cad_mesh;
-                });
-            }
-        }
-    }
-}
-
-// ============================================================================
-// 5. MODÜL: BEVY SİSTEMLERİ (SAHNE KURULUMU, SANAL PROB, GIZMO VE ETKİLEŞİM)
+// 4. MODÜL: BEVY 3B SAHNE KURULUMU VE PC-DMIS ARAYÜZ SİSTEMLERİ
 // ============================================================================
 fn setup_cmm_3d_scene(
     mut commands: Commands,
@@ -1325,11 +866,10 @@ fn compute_orbit_eye(cam: &OrbitCamera) -> Vec3 {
     cam.focus + Vec3::new(x, y, z)
 }
 
-/// Üst Araç Çubuğu (PC-DMIS Menü, STEP/IGES İçe Aktarma, Otomatik Unsur Seçimi) ve Dock Alanı
+/// PC-DMIS Çoklu Panel Arayüzü (Üst Araç Çubuğu, Sol Edit Window/Unsur Ağacı, Alt Probe Readouts DRO, Orta 3B CAD Ekranı)
 fn render_pcdmis_ui_system(
     mut contexts: EguiContexts,
     mut app_state: ResMut<CmmAppState>,
-    mut dock_tree: ResMut<PcDmisDockTree>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     cad_query: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<CadMeshEntity>>,
@@ -1443,23 +983,399 @@ fn render_pcdmis_ui_system(
         });
     });
 
-    // 3. KENETLENEBİLİR PC-DMIS PANELLERİ (DockArea)
-    egui::CentralPanel::default()
-        .frame(egui::Frame::none())
+    // 3. SOL KENETLENEBİLİR PANEL: EDIT WINDOW [COMMAND MODE] & UNSUR AĞACI
+    egui::SidePanel::left("pcdmis_left_dock")
+        .resizable(true)
+        .default_width(460.0)
+        .min_width(320.0)
         .show(ctx, |ui| {
-            let mut style = Style::from_egui(ui.style().as_ref());
-            style.tab_bar.fill_tab_bar = true;
+            ui.horizontal(|ui| {
+                ui.selectable_value(
+                    &mut app_state.left_tab,
+                    LeftPanelTab::EditWindowCommandMode,
+                    "📝 Edit Window [Command Mode]",
+                );
+                ui.selectable_value(
+                    &mut app_state.left_tab,
+                    LeftPanelTab::FeatureTreeAndGdt,
+                    "🌳 Unsur Ağacı & GD&T Raporu",
+                );
+            });
+            ui.separator();
 
-            let mut viewer = PcDmisTabViewer {
-                state: &mut app_state,
-                reload_cad_mesh: &mut reload_cad_mesh,
-                camera_preset: &mut camera_preset,
-            };
+            match app_state.left_tab {
+                LeftPanelTab::EditWindowCommandMode => {
+                    ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.2));
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(130, 185, 255),
+                                format!("PART NAME  : {}", app_state.cad_model.file_name),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(130, 185, 255),
+                                "REV NUMBER : 2026.1   SER NUMBER : SN-RUST-CMM-01",
+                            );
+                            ui.separator();
+                            ui.colored_label(
+                                egui::Color32::from_rgb(180, 220, 140),
+                                "STARTUP    =ALIGNMENT/START,RECALL:USE_PART_SETUP,LIST=YES",
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(180, 220, 140),
+                                "            ALIGNMENT/END",
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(245, 200, 110),
+                                format!(
+                                    "            LOADPROBE/RENISHAW_TP20_RUBY_D{:.1}MM",
+                                    app_state.ruby_diameter_mm
+                                ),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(245, 200, 110),
+                                "            TIP/T1A0B0, SHANKIJK=0, 0, 1, ANGLE=0",
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(190, 190, 190),
+                                format!(
+                                    "            PREHIT/{:.2}   RETRACT/{:.2}",
+                                    app_state.approach_retract_mm, app_state.approach_retract_mm
+                                ),
+                            );
+                            ui.separator();
 
-            DockArea::new(&mut dock_tree.tree)
-                .style(style)
-                .show_inside(ui, &mut viewer);
+                            for pt in &app_state.all_points {
+                                let s = pt.surface_pt;
+                                let n = pt.normal;
+                                let c = pt.probe_center_pt;
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(100, 235, 255),
+                                    format!(
+                                        "{:<10} =FEAT/CONTACT/VECTOR POINT/DEFAULT,CARTESIAN",
+                                        pt.id
+                                    ),
+                                );
+                                ui.label(format!(
+                                    "            THEO/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
+                                    s.x, s.y, s.z, n.x, n.y, n.z
+                                ));
+                                ui.label(format!(
+                                    "            ACTL/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
+                                    s.x, s.y, s.z, n.x, n.y, n.z
+                                ));
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(155, 165, 180),
+                                    format!(
+                                        "            PROB_CTR/<{:>8.3},{:>8.3},{:>8.3}>,RUBY_R={:.3}",
+                                        c.x, c.y, c.z, pt.probe_radius
+                                    ),
+                                );
+                            }
+
+                            for feat in &app_state.features {
+                                ui.add_space(4.0);
+                                match &feat.kind {
+                                    FittedFeatureKind::Plane {
+                                        centroid,
+                                        normal,
+                                        flatness,
+                                        hit_count,
+                                    } => {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(120, 250, 150),
+                                            format!(
+                                                "{:<10} =FEAT/PLANE,CARTESIAN,TRIANGLE,NO,LEAST_SQR",
+                                                feat.id
+                                            ),
+                                        );
+                                        ui.label(format!(
+                                            "            THEO/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
+                                            centroid.x, centroid.y, centroid.z, normal.x, normal.y, normal.z
+                                        ));
+                                        ui.label(format!(
+                                            "            ACTL/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>",
+                                            centroid.x, centroid.y, centroid.z, normal.x, normal.y, normal.z
+                                        ));
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(255, 215, 100),
+                                            format!(
+                                                "            CONSTR/PLANE,BF,HITS={} | FLATNESS={:.4} MM",
+                                                hit_count, flatness
+                                            ),
+                                        );
+                                    }
+                                    FittedFeatureKind::Circle {
+                                        center,
+                                        normal,
+                                        diameter,
+                                        probe_center_diameter,
+                                        roundness,
+                                        is_inner_bore,
+                                        hit_count,
+                                    } => {
+                                        let kind_str = if *is_inner_bore { "IN" } else { "OUT" };
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(255, 180, 95),
+                                            format!(
+                                                "{:<10} =FEAT/CIRCLE,CARTESIAN,{},LEAST_SQR",
+                                                feat.id, kind_str
+                                            ),
+                                        );
+                                        ui.label(format!(
+                                            "            THEO/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>,{:>8.4}",
+                                            center.x, center.y, center.z, normal.x, normal.y, normal.z, diameter
+                                        ));
+                                        ui.label(format!(
+                                            "            ACTL/<{:>8.3},{:>8.3},{:>8.3}>,<{:>7.4},{:>7.4},{:>7.4}>,{:>8.4} (RAW_PROB_D={:.4})",
+                                            center.x, center.y, center.z, normal.x, normal.y, normal.z, diameter, probe_center_diameter
+                                        ));
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(255, 215, 100),
+                                            format!(
+                                                "            CONSTR/CIRCLE,BF,HITS={} | ROUNDNESS={:.4} MM",
+                                                hit_count, roundness
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        });
+                }
+
+                LeftPanelTab::FeatureTreeAndGdt => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Hesaplanan Unsurlar (Constructed Features)");
+                        ui.separator();
+                        if app_state.features.is_empty() {
+                            ui.label(
+                                "Henüz düzlem veya daire hesaplanmadı. CAD modeli üzerinde en az 3 noktaya tıklayıp alt panelden 'Düzlem Hesapla' veya 'Daire Hesapla' düğmesine basın.",
+                            );
+                        }
+                        for feat in &app_state.features {
+                            ui.group(|ui| {
+                                match &feat.kind {
+                                    FittedFeatureKind::Plane {
+                                        centroid,
+                                        normal,
+                                        flatness,
+                                        hit_count,
+                                    } => {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(110, 240, 145),
+                                            format!(
+                                                "{} [DÜZLEM / PLANE - {} Nokta]",
+                                                feat.id, hit_count
+                                            ),
+                                        );
+                                        ui.label(format!(
+                                            "Merkez (X,Y,Z): ({:.3}, {:.3}, {:.3}) mm",
+                                            centroid.x, centroid.y, centroid.z
+                                        ));
+                                        ui.label(format!(
+                                            "Birim Normal (I,J,K): ({:.4}, {:.4}, {:.4})",
+                                            normal.x, normal.y, normal.z
+                                        ));
+                                        ui.label(format!(
+                                            "Düzlemsellik (Flatness ISO 1101): {:.4} mm",
+                                            flatness
+                                        ));
+                                    }
+                                    FittedFeatureKind::Circle {
+                                        center,
+                                        normal,
+                                        diameter,
+                                        probe_center_diameter,
+                                        roundness,
+                                        is_inner_bore,
+                                        hit_count,
+                                    } => {
+                                        let bore_label = if *is_inner_bore {
+                                            "İÇ DELİK / BORE"
+                                        } else {
+                                            "DIŞ ÇAP / BOSS"
+                                        };
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(255, 190, 90),
+                                            format!(
+                                                "{} [DAİRE / {} - {} Nokta]",
+                                                feat.id, bore_label, hit_count
+                                            ),
+                                        );
+                                        ui.label(format!(
+                                            "Merkez (X,Y,Z): ({:.3}, {:.3}, {:.3}) mm",
+                                            center.x, center.y, center.z
+                                        ));
+                                        ui.label(format!(
+                                            "Kesit Normali (I,J,K): ({:.4}, {:.4}, {:.4})",
+                                            normal.x, normal.y, normal.z
+                                        ));
+                                        ui.label(format!(
+                                            "Telafili Çap (Ø): {:.4} mm (Prob Yörünge Ø: {:.4} mm) | Dairesellik: {:.4} mm",
+                                            diameter, probe_center_diameter, roundness
+                                        ));
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+            }
         });
+
+    // 4. ALT KENETLENEBİLİR PANEL: PROBE READOUTS (DRO) VE UNSUR HESAPLAMA KONTROLLERİ
+    egui::TopBottomPanel::bottom("pcdmis_bottom_dro")
+        .resizable(true)
+        .default_height(165.0)
+        .min_height(130.0)
+        .show(ctx, |ui| {
+            ui.columns(2, |cols| {
+                cols[0].group(|ui| {
+                    ui.heading("PROBE READOUTS (DRO - MM)");
+                    let s = app_state.live_surface_target;
+                    let n = app_state.live_surface_normal;
+                    let p = app_state.live_probe_tip_center;
+
+                    egui::Grid::new("dro_grid")
+                        .striped(true)
+                        .min_col_width(95.0)
+                        .show(ui, |ui| {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 95, 95),
+                                egui::RichText::new(format!("X: {:>9.3}", s.x))
+                                    .monospace()
+                                    .size(15.5),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(180, 190, 205),
+                                egui::RichText::new(format!("I: {:>8.4}", n.x))
+                                    .monospace()
+                                    .size(13.5),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(150, 160, 175),
+                                egui::RichText::new(format!("Prob X: {:>8.3}", p.x)).monospace(),
+                            );
+                            ui.end_row();
+
+                            ui.colored_label(
+                                egui::Color32::from_rgb(95, 240, 125),
+                                egui::RichText::new(format!("Y: {:>9.3}", s.y))
+                                    .monospace()
+                                    .size(15.5),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(180, 190, 205),
+                                egui::RichText::new(format!("J: {:>8.4}", n.y))
+                                    .monospace()
+                                    .size(13.5),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(150, 160, 175),
+                                egui::RichText::new(format!("Prob Y: {:>8.3}", p.y)).monospace(),
+                            );
+                            ui.end_row();
+
+                            ui.colored_label(
+                                egui::Color32::from_rgb(95, 175, 255),
+                                egui::RichText::new(format!("Z: {:>9.3}", s.z))
+                                    .monospace()
+                                    .size(15.5),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(180, 190, 205),
+                                egui::RichText::new(format!("K: {:>8.4}", n.z))
+                                    .monospace()
+                                    .size(13.5),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(150, 160, 175),
+                                egui::RichText::new(format!("Prob Z: {:>8.3}", p.z)).monospace(),
+                            );
+                            ui.end_row();
+                        });
+                });
+
+                cols[1].group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.heading(format!(
+                            "Aktif Vuruş Tamponu ({} Nokta)",
+                            app_state.current_hits.len()
+                        ));
+                        if ui.button("📐 Düzlem Hesapla (SVD)").clicked() {
+                            match metrology::fit_plane_svd(&app_state.current_hits) {
+                                Ok(kind) => {
+                                    let id = format!("PLN{}", app_state.features.len() + 1);
+                                    app_state
+                                        .features
+                                        .push(ConstructedFeature { id: id.clone(), kind });
+                                    app_state.current_hits.clear();
+                                    app_state.status_message = format!(
+                                        "{} SVD en küçük kareler ve prob telafisi ile oluşturuldu.",
+                                        id
+                                    );
+                                }
+                                Err(e) => app_state.status_message = e,
+                            }
+                        }
+                        if ui.button("⭕ Daire Hesapla (CIR)").clicked() {
+                            match metrology::fit_circle_3d(&app_state.current_hits) {
+                                Ok(kind) => {
+                                    let id = format!("CIR{}", app_state.features.len() + 1);
+                                    app_state
+                                        .features
+                                        .push(ConstructedFeature { id: id.clone(), kind });
+                                    app_state.current_hits.clear();
+                                    app_state.status_message = format!(
+                                        "{} 3B kesit projeksiyonu, Gauss-Newton ve yakut yarıçap telafisi ile oluşturuldu.",
+                                        id
+                                    );
+                                }
+                                Err(e) => app_state.status_message = e,
+                            }
+                        }
+                        if ui.button("🗑 Tamponu Temizle").clicked() {
+                            app_state.current_hits.clear();
+                        }
+                    });
+
+                    ui.separator();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Yakut Küre Çapı (Ø mm):");
+                        ui.add(
+                            egui::Slider::new(&mut app_state.ruby_diameter_mm, 1.0..=8.0)
+                                .step_by(0.5),
+                        );
+                        ui.label("Yaklaşma Mesafesi (mm):");
+                        ui.add(
+                            egui::Slider::new(&mut app_state.approach_retract_mm, 0.0..=15.0)
+                                .step_by(0.5),
+                        );
+                    });
+
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Kamera Görünümü:");
+                        if ui.small_button("İzometrik").clicked() {
+                            camera_preset = Some((-0.65, 0.55));
+                        }
+                        if ui.small_button("Üst (+Z)").clicked() {
+                            camera_preset = Some((0.0, 1.55));
+                        }
+                        if ui.small_button("Ön (-Y)").clicked() {
+                            camera_preset = Some((0.0, 0.05));
+                        }
+                        if ui.small_button("Sağ (+X)").clicked() {
+                            camera_preset = Some((std::f32::consts::FRAC_PI_2, 0.05));
+                        }
+                    });
+                });
+            });
+        });
+
+    // 5. KALAN MERKEZ ALAN: 3B GRAPHIC DISPLAY WINDOW (Şeffaf Bevy 3B CAD Sahnesi)
+    let available_3d_rect = ctx.available_rect();
+    app_state.viewport_rect = Some(available_3d_rect);
 
     if reload_cad_mesh {
         if let Ok((mesh_handle, _)) = cad_query.get_single() {
@@ -1676,12 +1592,10 @@ fn cad_viewport_interaction_and_probe_system(
 
 /// CAD Keskin Kenarları (Wireframe), Makine Koordinat Eksenleri, Nokta Normalleri ve Düzlem/Daire Gizmo Çizimi
 fn draw_cad_edges_and_metrology_gizmos(mut gizmos: Gizmos, app_state: Res<CmmAppState>) {
-    // 1. Parça Koordinat Sistemi Triad (X: Kırmızı, Y: Yeşil, Z: Mavi)
     gizmos.arrow(Vec3::ZERO, Vec3::X * 22.0, Color::srgb(0.95, 0.2, 0.2));
     gizmos.arrow(Vec3::ZERO, Vec3::Y * 22.0, Color::srgb(0.2, 0.9, 0.3));
     gizmos.arrow(Vec3::ZERO, Vec3::Z * 22.0, Color::srgb(0.2, 0.55, 1.0));
 
-    // 2. CAD B-Rep Keskin Sınır Kenarları (PC-DMIS CAD Edge Görünümü)
     if app_state.show_wireframe_edges {
         let edge_color = Color::srgba(0.10, 0.14, 0.20, 0.9);
         for &[a, b] in &app_state.cad_model.feature_edges {
@@ -1689,7 +1603,6 @@ fn draw_cad_edges_and_metrology_gizmos(mut gizmos: Gizmos, app_state: Res<CmmApp
         }
     }
 
-    // 3. Canlı Yüzey Temas Noktası ve Normal Vektör Oku
     if app_state.is_hovering_cad {
         let pt = app_state.live_surface_target;
         let norm = app_state.live_surface_normal;
@@ -1701,7 +1614,6 @@ fn draw_cad_edges_and_metrology_gizmos(mut gizmos: Gizmos, app_state: Res<CmmApp
         gizmos.arrow(pt, pt + norm * 9.0, Color::srgb(1.0, 0.85, 0.1));
     }
 
-    // 4. Alınan Tüm Vektör Noktaları ve (I, J, K) Vektör Okları
     for hit in &app_state.all_points {
         gizmos.sphere(
             Isometry3d::from_translation(hit.surface_pt),
@@ -1715,8 +1627,7 @@ fn draw_cad_edges_and_metrology_gizmos(mut gizmos: Gizmos, app_state: Res<CmmApp
         );
     }
 
-    // 5. Hesaplanan Düzlem ve Dairelerin 3B Geometrik Gösterimi
-    for feat in &self.state.features {
+    for feat in &app_state.features {
         match &feat.kind {
             FittedFeatureKind::Plane {
                 centroid, normal, ..
@@ -1754,14 +1665,13 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Rust-DMIS 2026 | OpenCASCADE CAD Viewer & CMM Metrology System".into(),
-                resolution: (1440.0, 900.0).into(),
+                resolution: WindowResolution::new(1440.0, 900.0),
                 ..default()
             }),
             ..default()
         }))
         .add_plugins(EguiPlugin)
         .init_resource::<CmmAppState>()
-        .init_resource::<PcDmisDockTree>()
         .add_systems(Startup, setup_cmm_3d_scene)
         .add_systems(
             Update,
