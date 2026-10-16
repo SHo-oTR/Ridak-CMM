@@ -1,0 +1,70 @@
+name: Rust-DMIS CMM Build & Release Artifacts
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      enable_occt:
+        description: "OpenCASCADE C++ çekirdeğini (--features occt) derlemeye dahil et"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-cmm:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: rust_pcdmis_cmm-windows-x64
+            binary_path: target/release/rust_pcdmis_cmm.exe
+          - os: ubuntu-latest
+            artifact_name: rust_pcdmis_cmm-linux-x64
+            binary_path: target/release/rust_pcdmis_cmm
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Bevy & Audio/Window Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ pkg-config cmake clang llvm-dev libclang-dev \
+            libx11-dev libasound2-dev libudev-dev libxkbcommon-x11-0 \
+            libwayland-dev libxrandr-dev libxi-dev libxcursor-dev \
+            libgtk-3-dev             libocct-foundation-dev libocct-modeling-data-dev             libocct-modeling-algorithms-dev libocct-data-exchange-dev
+
+      - name: Install Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Registry and Target Directory
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust-DMIS CMM (Standard Mode with Reference CAD Block)
+        if: ${{ github.event.inputs.enable_occt != 'true' }}
+        run: cargo build --release --locked || cargo build --release
+
+      - name: Build Rust-DMIS CMM (OpenCASCADE STEP/IGES Feature Enabled)
+        if: ${{ github.event.inputs.enable_occt == 'true' }}
+        run: cargo build --release --features occt
+
+      - name: Upload Compiled CMM Executable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.binary_path }}
+          if-no-files-found: error
