@@ -7,18 +7,16 @@ authors = ["CMM Metrology Engineer"]
 
 [features]
 default = []
-# Sistemde CMake ve C++ derleyicisi / OpenCASCADE kurulu olduğunda STEP ve IGES B-Rep
-# dosyalarını doğrudan OpenCASCADE çekirdeği ile okumak için:
-# cargo run --release --features occt
+# GitHub Actions veya yerel ortamda OpenCASCADE C++ çekirdeği ile STEP/IGES okumak için:
+# cargo build --release --features occt
 occt = ["dep:opencascade", "dep:opencascade-sys"]
 
 [dependencies]
 # 3B PBR Grafik Motoru ve Sahne Yönetimi
 bevy = { version = "0.15", default-features = true }
 
-# PC-DMIS Benzeri Kenetlenebilir (Dockable) Arayüz Altyapısı
+# PC-DMIS Benzeri Kenetlenebilir (Dockable) Arayüz Altyapısı (bevy 0.15 ile tam uyumlu)
 bevy_egui = "0.31"
-egui_dock = "0.15"
 
 # Metroloji, SVD Düzlem/Daire Uydurma ve Doğrusal Cebir Çözücü
 nalgebra = "0.33"
@@ -35,3 +33,7 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
